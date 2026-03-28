@@ -15,10 +15,11 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional
 
 # 尝试导入 markdown_it
 try:
-    import markdown_it
+    from markdown_it import MarkdownIt
     MD_AVAILABLE = True
 except ImportError:
     print("❌ 需要安装 markdown_it: pip install markdown-it-py")
@@ -27,15 +28,24 @@ except ImportError:
 
 def translate_to_pinyin(chinese: str) -> str:
     """简单的中文转拼音（无声调）"""
-    # 这里使用简单的映射，实际应该使用 pypinyin 库
-    # 临时方案：保留英文，中文用 - 替代
+    # 简单映射（实际应该使用 pypinyin 库）
+    pinyin_map = {
+        '我': 'Wo', '是': 'Shi', '的': 'De', '一': 'Yi', '个': 'Ge',
+        '爱': 'Ai', '你': 'Ni', '好': 'Hao', '中': 'Zhong', '国': 'Guo',
+        '博': 'Bo', '客': 'Ke', '文': 'Wen', '章': 'Zhang', '记': 'Ji',
+        '录': 'Lu', '实': 'Shi', '战': 'Zhan', '教': 'Jiao', '程': 'Cheng',
+    }
+    
     result = []
     for char in chinese:
         if char.isalnum():
             result.append(char)
+        elif char in pinyin_map:
+            result.append(pinyin_map[char])
         else:
             result.append('-')
-    return ''.join(result).replace('--', '-').strip('-')
+    
+    return ''.join(result).replace('--', '-').strip('-') or 'Untitled'
 
 
 def translate_title(title: str) -> str:
@@ -51,7 +61,6 @@ def convert_markdown_to_html(md_content: str) -> str:
         # 简单转换
         return md_content.replace('\n', '<br>\n')
     
-    from markdown_it import MarkdownIt
     md = MarkdownIt()
     html = md.render(md_content)
     
@@ -130,7 +139,7 @@ def create_html_document(title: str, html_content: str, front_matter: dict) -> s
 </html>"""
 
 
-def convert_file(md_path: Path, output_dir: Path = None) -> dict:
+def convert_file(md_path: Path) -> dict:
     """转换单个文件"""
     print(f"📝 处理：{md_path.name}")
     
@@ -142,7 +151,7 @@ def convert_file(md_path: Path, output_dir: Path = None) -> dict:
         front_matter, body = parse_front_matter(md_content)
         if front_matter is None:
             print(f"   ⚠️  无 Front Matter，跳过")
-            return {'success': False, 'reason': 'no_front_matter'}
+            return {'success': False, 'reason': 'no_front_matter', 'file': str(md_path)}
         
         title = front_matter.get('title', md_path.stem)
         
@@ -156,21 +165,54 @@ def convert_file(md_path: Path, output_dir: Path = None) -> dict:
         english_title = translate_title(title)
         html_filename = f"{md_path.stem}.html"
         
-        # 确定输出目录
-        if output_dir:
-            output_path = output_dir / html_filename
-        else:
-            output_path = md_path.parent / html_filename
+        # 确定输出目录（与 MD 文件同级）
+        output_path = md_path.parent / html_filename
         
         # 保存 HTML 文件
         output_path.write_text(html_doc, encoding='utf-8')
         
-        print(f"   ✅ 已保存：{output_path.name}")
-        return {'success': True, 'output': str(output_path)}
+        print(f"   ✅ 已保存：{html_filename}")
+        return {
+            'success': True,
+            'output': str(output_path),
+            'file': str(md_path),
+            'title': title,
+        }
         
     except Exception as e:
         print(f"   ❌ 失败：{e}")
-        return {'success': False, 'reason': str(e)}
+        return {'success': False, 'reason': str(e), 'file': str(md_path)}
+
+
+def print_report(results: List[dict]) -> None:
+    """打印转换报告"""
+    print()
+    print("=" * 60)
+    print("📊 转换报告")
+    print("=" * 60)
+    
+    total = len(results)
+    success = sum(1 for r in results if r['success'])
+    failed = total - success
+    
+    print(f"\n总计：{total} 个文件")
+    print(f"成功：{success} 个")
+    print(f"失败：{failed} 个")
+    
+    if success > 0:
+        print(f"\n✅ 成功转换的文件:")
+        for r in results:
+            if r['success']:
+                print(f"   - {r['file']} → {r['output']}")
+    
+    if failed > 0:
+        print(f"\n❌ 失败的文件:")
+        for r in results:
+            if not r['success']:
+                print(f"   - {r['file']}: {r['reason']}")
+    
+    print()
+    print("=" * 60)
 
 
 def main():
@@ -189,7 +231,7 @@ def main():
     print()
     
     # 查找所有 Markdown 文件
-    md_files = list(input_dir.rglob('*.md'))
+    md_files = sorted(input_dir.rglob('*.md'))
     
     if not md_files:
         print("❌ 未找到 Markdown 文件")
@@ -197,20 +239,18 @@ def main():
     
     print(f"找到 {len(md_files)} 个 Markdown 文件\n")
     
-    # 转换统计
-    stats = {'success': 0, 'failed': 0}
-    
+    # 转换
+    results = []
     for md_file in md_files:
         result = convert_file(md_file)
-        if result['success']:
-            stats['success'] += 1
-        else:
-            stats['failed'] += 1
+        results.append(result)
     
-    print()
-    print(f"=== 转换完成 ===")
-    print(f"成功：{stats['success']}")
-    print(f"失败：{stats['failed']}")
+    # 打印报告
+    print_report(results)
+    
+    # 返回状态码
+    failed = sum(1 for r in results if not r['success'])
+    sys.exit(0 if failed == 0 else 1)
 
 
 if __name__ == '__main__':

@@ -1,55 +1,64 @@
 /**
  * wordpress-blog-writer
- * WordPress 博客写作助手 Skill
+ * WordPress 博客写作助手 Skill v2.0
  * 
- * 功能：从构思到发布完整的博客文章
- * 触发：写博客、写文章、写日志、写日记等
+ * 功能：从构思到发布完整的博客文章（HTML 格式）
+ * 触发：写博客、写文章、写日志、写日记、/publish-blog
  */
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
+import { HTMLHint } from 'htmlhint';
 
 const execAsync = promisify(exec);
 
 /**
- * Skill 配置
+ * Skill 配置（从 openclaw.json 读取）
  */
-const SKILL_CONFIG = {
+interface SkillConfig {
+  blogDir: string;
+  postsDir: string;
+  wordpress: {
+    baseUrl: string;
+    username: string;
+    appPassword: string;
+  };
+}
+
+const DEFAULT_CONFIG: SkillConfig = {
   blogDir: '/home/admin/maxwell-blog',
   postsDir: '/home/admin/maxwell-blog/posts',
-};
-
-// WordPress API 配置（从 openclaw.json 读取）
-const WP_CONFIG = {
-  baseUrl: 'http://47.84.100.47',
-  username: 'maxwell',
-  appPassword: 'UjooevUHrkoVVTkKfh5kqi82',
+  wordpress: {
+    baseUrl: 'http://47.84.100.47',
+    username: 'maxwell',
+    appPassword: '', // 从 openclaw.json 读取
+  },
 };
 
 // 触发关键词
-const TRIGGER_KEYWORDS = ['写博客', '写文章', '写日志', '写日记', '/blog', '/post'];
+const TRIGGER_KEYWORDS = ['写博客', '写文章', '写日志', '写日记', '/publish-blog', '发布'];
 
 // 当前处理状态
-let currentState: {
-  articleTitle?: string;
-  articleHtml?: string;
+interface ArticleState {
+  title: string;
+  html?: string;
   filePath?: string;
   postId?: number;
   stage: 'idle' | 'outline' | 'html' | 'draft' | 'published';
-} = { stage: 'idle' };
+  category?: string;
+  tags?: string[];
+}
+
+let currentState: ArticleState = { title: '', stage: 'idle' };
 
 /**
  * 检查消息是否触发 Skill
  */
 export function shouldTrigger(message: string): boolean {
   // 检查发布命令
-  if (message.startsWith('/publish') || message === '发布') {
-    return true;
-  }
-  // 检查同步命令
-  if (message.startsWith('/sync') || message.includes('同步')) {
+  if (message.startsWith('/publish')) {
     return true;
   }
   // 检查常规触发词
@@ -60,28 +69,49 @@ export function shouldTrigger(message: string): boolean {
  * 主处理函数
  */
 export async function handle(message: string, context: any): Promise<string> {
+  // 从上下文读取配置
+  const config: SkillConfig = {
+    ...DEFAULT_CONFIG,
+    wordpress: {
+      ...DEFAULT_CONFIG.wordpress,
+      appPassword: context?.wordpress?.appPassword || 'UjooevUHrkoVVTkKfh5kqi82',
+    },
+  };
+
   // 处理发布命令
   if (message.startsWith('/publish')) {
     const parts = message.split(' ');
-    const postId = parts[1] ? parseInt(parts[1]) : currentState.postId;
-    if (!postId) {
-      return '❌ 请指定文章 ID，如 `/publish 441`，或先创建文章。';
+    if (parts.length > 1 && parts[1]) {
+      const postId = parseInt(parts[1]);
+      if (!isNaN(postId)) {
+        return await publishPost(postId, config);
+      }
     }
-    return await publishPost(postId);
+    // 没有指定 ID，询问用户
+    return '请告诉我要发布哪篇文章，可以提供 WordPress 文章 ID（如 `/publish 441`），或说"发布最新的文章"。';
   }
   
-  if (message === '发布' && currentState.postId) {
-    return await publishPost(currentState.postId);
-  }
-  
-  // 处理同步命令
-  if (message.startsWith('/sync') || message.includes('同步')) {
-    return await syncFromWordPress();
+  // 处理"发布"命令
+  if (message === '发布') {
+    if (currentState.postId) {
+      return await publishPost(currentState.postId, config);
+    }
+    return '❌ 没有找到待发布的文章。请先创建文章。';
   }
   
   // 处理常规写作流程
   if (!shouldTrigger(message)) {
     return '';
+  }
+  
+  // 检查是否是审核确认
+  if (message.includes('审核通过') || message.includes('确认')) {
+    return await handleReviewConfirm(config);
+  }
+  
+  // 检查是否是修改请求
+  if (message.includes('修改')) {
+    return await handleModificationRequest(message, config);
   }
   
   // 获取当天对话内容
@@ -97,7 +127,6 @@ export async function handle(message: string, context: any): Promise<string> {
  * 获取当天对话摘要
  */
 async function getTodaySummary(context: any): Promise<string> {
-  // 从上下文提取今天的对话内容
   return '今天的工作内容摘要';
 }
 
@@ -105,7 +134,6 @@ async function getTodaySummary(context: any): Promise<string> {
  * 推荐写作主题
  */
 function recommendTopics(summary: string): Topic[] {
-  // 基于对话内容分析推荐主题
   return [
     {
       title: '主题 1',
@@ -133,7 +161,7 @@ function formatTopicRecommendation(topics: Topic[]): string {
 /**
  * 编写文章大纲
  */
-function createOutline(topic: string): string {
+export function createOutline(topic: string): string {
   return `文章大纲：
 
 ## 一、引言
@@ -154,16 +182,15 @@ function createOutline(topic: string): string {
 /**
  * 生成 HTML 文章
  */
-async function generateHtml(title: string, outline: string, context: any): Promise<string> {
+export async function generateHtml(title: string, outline: string, context: any): Promise<string> {
   // AI 直接生成 HTML 格式内容
-  // 这里需要调用 AI 模型生成 HTML
   return '<h1>标题</h1><p>内容...</p>';
 }
 
 /**
  * HTML 后处理（修正格式错误）
  */
-function postProcessHtml(html: string): string {
+export function postProcessHtml(html: string): string {
   // 移除包裹标题的 p 标签
   html = html.replace(/<p>(<h[1-6]>.*?<\/h[1-6]>)<\/p>/g, '$1');
   // 移除包裹列表的 p 标签
@@ -181,23 +208,24 @@ function postProcessHtml(html: string): string {
 /**
  * HTML 验证
  */
-async function validateHtml(html: string): Promise<{ valid: boolean; errors: string[] }> {
+export async function validateHtml(html: string): Promise<{ valid: boolean; errors: string[] }> {
   try {
-    const { exec } = await import('child_process');
-    const execAsync = promisify(exec);
+    const messages = HTMLHint.verify(html, {
+      'tagname-lowercase': true,
+      'attr-lowercase': true,
+      'attr-value-double-quotes': true,
+      'doctype-first': true,
+      'tag-pair': true,
+      'spec-char-escape': true,
+      'id-unique': true,
+      'src-not-empty': true,
+      'attr-no-duplication': true,
+      'title-require': true,
+    });
     
-    // 写入临时文件
-    const tempFile = '/tmp/validate.html';
-    fs.writeFileSync(tempFile, html, 'utf-8');
-    
-    // 运行 htmlhint
-    const result = await execAsync(`htmlhint ${tempFile} 2>&1`);
-    
-    // 清理
-    fs.unlinkSync(tempFile);
-    
-    if (result.stderr || result.stdout) {
-      return { valid: false, errors: [result.stderr || result.stdout] };
+    if (messages.length > 0) {
+      const errors = messages.map((m: any) => `${m.message} (line ${m.line}, col ${m.col})`);
+      return { valid: false, errors };
     }
     
     return { valid: true, errors: [] };
@@ -207,34 +235,48 @@ async function validateHtml(html: string): Promise<{ valid: boolean; errors: str
 }
 
 /**
- * 翻译标题为英文
+ * 翻译标题为英文（AI 翻译，失败用拼音）
  */
-async function translateTitleToEnglish(chineseTitle: string): Promise<string> {
-  // AI 直接翻译
-  // 如果失败，使用拼音
-  return chineseTitle.replace(/[^a-zA-Z0-9]/g, '-');
+export async function translateTitleToEnglish(chineseTitle: string): Promise<string> {
+  // 简单实现：保留英文和数字，中文用拼音替代
+  // 实际应该调用 AI 模型翻译
+  let result = chineseTitle.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '-');
+  
+  // 简单拼音映射（实际应该使用 pypinyin）
+  const pinyinMap: Record<string, string> = {
+    '我': 'Wo', '是': 'Shi', '的': 'De', '一': 'Yi', '个': 'Ge',
+    '爱': 'Ai', '你': 'Ni', '好': 'Hao', '中': 'Zhong', '国': 'Guo',
+  };
+  
+  for (const [cn, py] of Object.entries(pinyinMap)) {
+    result = result.replace(new RegExp(cn, 'g'), py);
+  }
+  
+  // 清理多余的分隔符
+  result = result.replace(/-+/g, '-').replace(/^-|-$/g, '');
+  
+  return result || 'Untitled';
 }
 
 /**
  * 保存 HTML 文件
  */
-async function saveHtml(title: string, html: string, frontMatter: any): Promise<string> {
+export async function saveHtml(title: string, html: string, frontMatter: any): Promise<string> {
   const date = new Date();
   const year = date.getFullYear().toString();
   const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const day = date.getDate().toString().padStart(2, '0');
   
   // 翻译标题
   const englishTitle = await translateTitleToEnglish(title);
   
   // 检查文件是否已存在，添加序号
-  let filename = `${year}-${month}-${day}-${englishTitle}.html`;
-  const dir = path.join(SKILL_CONFIG.postsDir, year, month);
+  let filename = `${year}-${month}-${englishTitle}.html`;
+  const dir = path.join(DEFAULT_CONFIG.postsDir, year, month);
   let filePath = path.join(dir, filename);
   
   let counter = 1;
   while (fs.existsSync(filePath)) {
-    filename = `${year}-${month}-${day}-${englishTitle}-${counter}.html`;
+    filename = `${year}-${month}-${englishTitle}-${counter}.html`;
     filePath = path.join(dir, filename);
     counter++;
   }
@@ -242,7 +284,7 @@ async function saveHtml(title: string, html: string, frontMatter: any): Promise<
   // 创建目录
   fs.mkdirSync(dir, { recursive: true });
   
-  // 构建完整 HTML 文档
+  // 构建 Front Matter JSON
   const frontMatterJson = JSON.stringify({
     title: title,
     date: new Date().toISOString().slice(0, 16).replace('T', ' '),
@@ -252,6 +294,7 @@ async function saveHtml(title: string, html: string, frontMatter: any): Promise<
     status: 'draft',
   }, null, 2);
   
+  // 构建完整 HTML 文档
   const fullHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -274,18 +317,18 @@ ${html}
 /**
  * 提交到 GitHub
  */
-async function commitToGithub(message: string): Promise<void> {
-  await execAsync(`cd ${SKILL_CONFIG.blogDir} && git add . && git commit -m "${message}" && git push`);
+export async function commitToGithub(message: string): Promise<void> {
+  await execAsync(`cd ${DEFAULT_CONFIG.blogDir} && git add . && git commit -m "${message}" && git push`);
 }
 
 /**
  * 获取 WordPress 分类 ID
  */
-async function getCategoryId(categoryName: string): Promise<number> {
-  const auth = Buffer.from(`${WP_CONFIG.username}:${WP_CONFIG.appPassword}`).toString('base64');
+export async function getCategoryId(categoryName: string, config: SkillConfig): Promise<number> {
+  const auth = Buffer.from(`${config.wordpress.username}:${config.wordpress.appPassword}`).toString('base64');
   
   // 查询现有分类
-  const response = await fetch(`${WP_CONFIG.baseUrl}/wp-json/wp/v2/categories?search=${encodeURIComponent(categoryName)}`, {
+  const response = await fetch(`${config.wordpress.baseUrl}/wp-json/wp/v2/categories?search=${encodeURIComponent(categoryName)}`, {
     headers: {
       'Authorization': `Basic ${auth}`,
     },
@@ -297,30 +340,17 @@ async function getCategoryId(categoryName: string): Promise<number> {
     return categories[0].id;
   }
   
-  // 创建新分类
-  const createResponse = await fetch(`${WP_CONFIG.baseUrl}/wp-json/wp/v2/categories`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      name: categoryName,
-    }),
-  });
-  
-  const category = await createResponse.json() as any;
-  return category.id;
+  throw new Error(`分类 "${categoryName}" 不存在，请先在 WordPress 中创建`);
 }
 
 /**
  * 获取或创建标签 ID
  */
-async function getOrCreateTagId(tagName: string): Promise<number> {
-  const auth = Buffer.from(`${WP_CONFIG.username}:${WP_CONFIG.appPassword}`).toString('base64');
+export async function getOrCreateTagId(tagName: string, config: SkillConfig): Promise<number> {
+  const auth = Buffer.from(`${config.wordpress.username}:${config.wordpress.appPassword}`).toString('base64');
   
   // 查询现有标签
-  const response = await fetch(`${WP_CONFIG.baseUrl}/wp-json/wp/v2/tags?search=${encodeURIComponent(tagName)}`, {
+  const response = await fetch(`${config.wordpress.baseUrl}/wp-json/wp/v2/tags?search=${encodeURIComponent(tagName)}`, {
     headers: {
       'Authorization': `Basic ${auth}`,
     },
@@ -333,7 +363,7 @@ async function getOrCreateTagId(tagName: string): Promise<number> {
   }
   
   // 创建新标签
-  const createResponse = await fetch(`${WP_CONFIG.baseUrl}/wp-json/wp/v2/tags`, {
+  const createResponse = await fetch(`${config.wordpress.baseUrl}/wp-json/wp/v2/tags`, {
     method: 'POST',
     headers: {
       'Authorization': `Basic ${auth}`,
@@ -351,22 +381,23 @@ async function getOrCreateTagId(tagName: string): Promise<number> {
 /**
  * 发布到 WordPress 草稿箱
  */
-async function publishToWordPressDraft(
+export async function publishToWordPressDraft(
   title: string,
   html: string,
   categoryName: string,
-  tags: string[]
+  tags: string[],
+  config: SkillConfig
 ): Promise<number> {
-  const auth = Buffer.from(`${WP_CONFIG.username}:${WP_CONFIG.appPassword}`).toString('base64');
+  const auth = Buffer.from(`${config.wordpress.username}:${config.wordpress.appPassword}`).toString('base64');
   
   // 获取分类 ID
-  const categoryId = await getCategoryId(categoryName);
+  const categoryId = await getCategoryId(categoryName, config);
   
   // 获取标签 IDs
-  const tagIds = await Promise.all(tags.map(tag => getOrCreateTagId(tag)));
+  const tagIds = await Promise.all(tags.map(tag => getOrCreateTagId(tag, config)));
   
   // 发布到草稿箱
-  const response = await fetch(`${WP_CONFIG.baseUrl}/wp-json/wp/v2/posts`, {
+  const response = await fetch(`${config.wordpress.baseUrl}/wp-json/wp/v2/posts`, {
     method: 'POST',
     headers: {
       'Authorization': `Basic ${auth}`,
@@ -393,10 +424,10 @@ async function publishToWordPressDraft(
 /**
  * 正式发布 WordPress 文章
  */
-async function publishWordPressPost(postId: number): Promise<void> {
-  const auth = Buffer.from(`${WP_CONFIG.username}:${WP_CONFIG.appPassword}`).toString('base64');
+export async function publishWordPressPost(postId: number, config: SkillConfig): Promise<void> {
+  const auth = Buffer.from(`${config.wordpress.username}:${config.wordpress.appPassword}`).toString('base64');
   
-  const response = await fetch(`${WP_CONFIG.baseUrl}/wp-json/wp/v2/posts/${postId}`, {
+  const response = await fetch(`${config.wordpress.baseUrl}/wp-json/wp/v2/posts/${postId}`, {
     method: 'POST',
     headers: {
       'Authorization': `Basic ${auth}`,
@@ -414,61 +445,71 @@ async function publishWordPressPost(postId: number): Promise<void> {
 }
 
 /**
- * 从 WordPress 同步修改
+ * 处理审核确认
  */
-async function syncFromWordPress(): Promise<string> {
-  if (!currentState.postId || !currentState.filePath) {
-    return '❌ 没有需要同步的文章。请先创建或发布文章。';
+async function handleReviewConfirm(config: SkillConfig): Promise<string> {
+  if (currentState.stage !== 'html' || !currentState.filePath) {
+    return '❌ 没有待审核的文章。';
   }
   
-  const auth = Buffer.from(`${WP_CONFIG.username}:${WP_CONFIG.appPassword}`).toString('base64');
-  
-  // 获取 WordPress 文章内容
-  const response = await fetch(`${WP_CONFIG.baseUrl}/wp-json/wp/v2/posts/${currentState.postId}`, {
-    headers: {
-      'Authorization': `Basic ${auth}`,
-    },
-  });
-  
-  if (!response.ok) {
-    return `❌ 获取文章内容失败：${response.status}`;
+  try {
+    // 读取 HTML 文件
+    const html = fs.readFileSync(currentState.filePath, 'utf-8');
+    
+    // 验证 HTML
+    const validation = await validateHtml(html);
+    if (!validation.valid) {
+      return `❌ HTML 验证失败：\n${validation.errors.join('\n')}`;
+    }
+    
+    // 提交到 GitHub
+    await commitToGithub(`feat: 新增文章 - ${currentState.title}`);
+    
+    // 发布到草稿箱
+    const postId = await publishToWordPressDraft(
+      currentState.title,
+      html,
+      currentState.category || '技术笔记',
+      currentState.tags || [],
+      config
+    );
+    
+    currentState.postId = postId;
+    currentState.stage = 'draft';
+    
+    return `✅ 已提交 GitHub\n✅ 已发布到 WordPress 草稿箱\n\n📝 编辑链接：${config.wordpress.baseUrl}/wp-admin/post.php?post=${postId}&action=edit\n\n请预览草稿，确认无误后说"发布"，我正式发布。`;
+  } catch (err: any) {
+    return `❌ 操作失败：${err.message}`;
+  }
+}
+
+/**
+ * 处理修改请求
+ */
+async function handleModificationRequest(message: string, config: SkillConfig): Promise<string> {
+  if (!currentState.filePath || !fs.existsSync(currentState.filePath)) {
+    return '❌ 没有找到可修改的文章。';
   }
   
-  const post = await response.json() as any;
-  
-  // 读取本地文件
-  let localContent = fs.readFileSync(currentState.filePath, 'utf-8');
-  
-  // 用 WordPress 内容更新本地文件
-  const updatedContent = localContent.replace(
-    /<body>\n<!--\n[\s\S]*?\n-->\n([\s\S]*?)\n<\/body>/s,
-    `<body>\n<!--\n${JSON.stringify({
-      title: post.title.rendered,
-      date: post.date,
-      author: 'Agent-Max & Maxwell Li',
-      categories: post.categories,
-      tags: post.tags,
-      status: post.status,
-    }, null, 2)}\n-->\n${post.content.raw}\n</body>`
-  );
-  
-  fs.writeFileSync(currentState.filePath, updatedContent, 'utf-8');
-  
-  // 提交到 Git
-  await commitToGithub(`feat: 同步 WordPress 修改 - ${post.title.rendered}`);
-  
-  return `✅ 已同步文章 "${post.title.rendered}" 的修改到本地文件。`;
+  // 提供修改选项
+  return `我理解您想修改文章。请告诉我具体想怎么修改，或者：
+
+1. **直接编辑文件**：编辑 ${currentState.filePath}，然后告诉我"已修改"
+2. **描述修改内容**：告诉我具体修改哪部分，我来修改
+3. **重新生成**：如果需要大改，我可以重新生成整篇文章
+
+您想选择哪种方式？`;
 }
 
 /**
  * 正式发布文章
  */
-async function publishPost(postId: number): Promise<string> {
+export async function publishPost(postId: number, config: SkillConfig): Promise<string> {
   try {
     // 重试 5 次
     for (let i = 0; i < 5; i++) {
       try {
-        await publishWordPressPost(postId);
+        await publishWordPressPost(postId, config);
         
         // 更新本地 HTML 文件注释
         if (currentState.filePath && fs.existsSync(currentState.filePath)) {
@@ -479,7 +520,7 @@ async function publishPost(postId: number): Promise<string> {
         
         currentState.stage = 'published';
         
-        const postUrl = `${WP_CONFIG.baseUrl}/?p=${postId}`;
+        const postUrl = `${config.wordpress.baseUrl}/?p=${postId}`;
         return `✅ 文章已正式发布！\n\n📰 文章链接：${postUrl}`;
       } catch (err: any) {
         if (i === 4) {
@@ -512,7 +553,8 @@ export default {
   commitToGithub,
   publishToWordPressDraft,
   publishWordPressPost,
-  syncFromWordPress,
+  publishPost,
   postProcessHtml,
   validateHtml,
+  translateTitleToEnglish,
 };
