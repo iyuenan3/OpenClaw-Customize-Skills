@@ -14,14 +14,14 @@ import * as path from 'path';
 const execAsync = promisify(exec);
 
 // 配置
-const BLOG_DIR = '/home/admin/maxwell-blog';
+const BLOG_DIR = process.env.BLOG_DIR || '/home/admin/maxwell-blog';
 const POSTS_DIR = path.join(BLOG_DIR, 'posts');
-const GITHUB_REPO = 'git@github.com:iyuenan3/maxwell-blog.git';
+const GITHUB_REPO = process.env.GITHUB_REPO || 'git@github.com:iyuenan3/maxwell-blog.git';
 
-// WordPress API 配置
+// WordPress API 配置（从 openclaw.json 读取）
 const WP_CONFIG = {
-  baseUrl: 'http://47.84.100.47',
-  username: 'Agent-Max',
+  baseUrl: '', // 从 openclaw.json 读取
+  username: '', // 从 openclaw.json 读取
   appPassword: '', // 从 openclaw.json 读取
 };
 
