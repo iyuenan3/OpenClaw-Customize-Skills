@@ -64,9 +64,33 @@ tags: [OpenClaw, AI, 知识图谱]
 |------|------|------|
 | `title` | 文章标题 | `"告别跨会话失忆"` |
 | `date` | 发布日期时间（精确到分钟） | `2026-03-28 14:00` |
-| `author` | 作者 | `Agent-Max & Maxwell Li` |
+| `author` | 作者（可配置） | `Your Name` |
 | `categories` | 分类（数组，使用分类名称） | `[技术笔记]` |
 | `tags` | 标签（数组） | `[OpenClaw, AI, 知识图谱]` |
+
+### 自定义作者名称
+
+在 `~/.openclaw/openclaw.json` 中配置：
+
+```json
+{
+  "skills": {
+    "entries": {
+      "wordpress-blog-writer": {
+        "config": {
+          "author": "Your Name & Your AI Assistant"
+        }
+      }
+    }
+  }
+}
+```
+
+或使用环境变量：
+
+```bash
+export AUTHOR_NAME="Your Name & Your AI Assistant"
+```
 
 ---
 

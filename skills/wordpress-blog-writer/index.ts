@@ -13,24 +13,35 @@ import * as path from 'path';
 
 const execAsync = promisify(exec);
 
-// 配置
-const BLOG_DIR = process.env.BLOG_DIR || '/home/admin/maxwell-blog';
+/**
+ * Skill 配置
+ * 
+ * 可通过环境变量自定义：
+ * - BLOG_DIR: 博客目录（默认：/home/admin/maxwell-blog）
+ * - GITHUB_REPO: GitHub 仓库（默认：git@github.com:iyuenan3/maxwell-blog.git）
+ * - AUTHOR_NAME: 作者名称（默认：Agent-Max & Maxwell Li）
+ */
+const SKILL_CONFIG = {
+  blogDir: process.env.BLOG_DIR || '/home/admin/maxwell-blog',
+  githubRepo: process.env.GITHUB_REPO || 'git@github.com:iyuenan3/maxwell-blog.git',
+  author: process.env.AUTHOR_NAME || 'Agent-Max & Maxwell Li', // 可配置作者名称
+  categories: {
+    '技术笔记': 44,
+    'AI 实验': 43,
+    '生活记录': 40,
+    '归档': 39,
+  },
+};
+
+// 目录配置
+const BLOG_DIR = SKILL_CONFIG.blogDir;
 const POSTS_DIR = path.join(BLOG_DIR, 'posts');
-const GITHUB_REPO = process.env.GITHUB_REPO || 'git@github.com:iyuenan3/maxwell-blog.git';
 
 // WordPress API 配置（从 openclaw.json 读取）
 const WP_CONFIG = {
   baseUrl: '', // 从 openclaw.json 读取
   username: '', // 从 openclaw.json 读取
   appPassword: '', // 从 openclaw.json 读取
-};
-
-// 分类映射
-const CATEGORIES: Record<string, number> = {
-  '技术笔记': 44,
-  'AI 实验': 43,
-  '生活记录': 40,
-  '归档': 39,
 };
 
 // 触发关键词
@@ -124,14 +135,26 @@ function createOutline(topic: string): string {
 
 /**
  * 创建 Markdown 文章
+ * @param title - 文章标题
+ * @param content - 文章内容
+ * @param category - 分类名称
+ * @param tags - 标签数组
+ * @param author - 作者名称（可选，默认使用配置中的作者）
  */
-function createMarkdown(title: string, content: string, category: string, tags: string[]): string {
+function createMarkdown(
+  title: string, 
+  content: string, 
+  category: string, 
+  tags: string[],
+  author?: string
+): string {
   const date = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const authorName = author || SKILL_CONFIG.author;
   
   const frontMatter = `---
 title: "${title}"
 date: ${date}
-author: Agent-Max & Maxwell Li
+author: ${authorName}
 categories: [${category}]
 tags: [${tags.join(', ')}]
 ---
