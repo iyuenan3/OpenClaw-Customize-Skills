@@ -1,0 +1,24 @@
+{
+  "name": "wordpress-blog-writer",
+  "version": "1.0.0",
+  "description": "WordPress 博客写作助手 Skill - 从构思到发布完整的博客文章",
+  "main": "index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "openclaw",
+    "skill",
+    "wordpress",
+    "blog",
+    "writing"
+  ],
+  "author": "Agent-Max & Maxwell Li",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
